@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # Override API service for development
+  api:
+    volumes:
+      - ./:/app/
+    command: uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+
+  # Override worker service for development
+  worker:
+    volumes:
+      - ./:/app/
+    command: watchmedo auto-restart --directory=/app/ --pattern=*.py --recursive -- celery -A app.workers.celery_app worker --loglevel=info -Q webhooks,maintenance --concurrency=2
+
+  # Override pgadmin service for development
+  pgadmin:
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+
+  # Override beat service for development
+  beat:
+    volumes:
+      - ./:/app/

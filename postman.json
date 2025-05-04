@@ -1,0 +1,271 @@
+{
+    "info": {
+      "_postman_id": "b68a0450-18e7-4a5a-b5c3-63c8a38c7fc4",
+      "name": "Webhook Delivery Service API",
+      "description": "A collection to test the Webhook Delivery Service API endpoints",
+      "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+      {
+        "key": "base_url",
+        "value": "http://localhost:8000",
+        "type": "string"
+      },
+      {
+        "key": "subscription_id",
+        "value": "",
+        "type": "string"
+      },
+      {
+        "key": "delivery_task_id",
+        "value": "",
+        "type": "string"
+      }
+    ],
+    "item": [
+      {
+        "name": "Health Checks",
+        "item": [
+          {
+            "name": "Root",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/",
+              "description": "Check the API root endpoint"
+            },
+            "response": []
+          },
+          {
+            "name": "Health Check",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/health",
+              "description": "Verify all dependencies (database, Redis, Celery)"
+            },
+            "response": []
+          },
+          {
+            "name": "Service Status",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/api/v1/status",
+              "description": "Get detailed status of all service components"
+            },
+            "response": []
+          },
+          {
+            "name": "Readiness Probe",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/api/v1/status/ready",
+              "description": "Kubernetes readiness probe"
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "Subscription Management",
+        "item": [
+          {
+            "name": "Create Subscription",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "var jsonData = JSON.parse(responseBody);",
+                    "pm.collectionVariables.set(\"subscription_id\", jsonData.id);"
+                  ],
+                  "type": "text/javascript"
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "url": "{{base_url}}/api/v1/subscriptions",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"target_url\": \"https://webhook.site/your-unique-id\",\n  \"secret\": \"your_secret_key\",\n  \"event_types\": [\"order.created\", \"user.updated\"]\n}"
+              },
+              "description": "Create a new webhook subscription"
+            },
+            "response": []
+          },
+          {
+            "name": "Get All Subscriptions",
+            "request": {
+              "method": "GET",
+              "url": {
+                "raw": "{{base_url}}/api/v1/subscriptions?skip=0&limit=100",
+                "host": ["{{base_url}}"],
+                "path": ["api", "v1", "subscriptions"],
+                "query": [
+                  {
+                    "key": "skip",
+                    "value": "0"
+                  },
+                  {
+                    "key": "limit",
+                    "value": "100"
+                  }
+                ]
+              },
+              "description": "Get all subscriptions with pagination"
+            },
+            "response": []
+          },
+          {
+            "name": "Get Subscription by ID",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/api/v1/subscriptions/{{subscription_id}}",
+              "description": "Get details of a specific subscription by ID"
+            },
+            "response": []
+          },
+          {
+            "name": "Update Subscription",
+            "request": {
+              "method": "PUT",
+              "url": "{{base_url}}/api/v1/subscriptions/{{subscription_id}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"target_url\": \"https://webhook.site/your-updated-id\",\n  \"secret\": \"updated_secret_key\",\n  \"event_types\": [\"order.created\", \"user.updated\", \"payment.received\"]\n}"
+              },
+              "description": "Update an existing subscription"
+            },
+            "response": []
+          },
+          {
+            "name": "Delete Subscription",
+            "request": {
+              "method": "DELETE",
+              "url": "{{base_url}}/api/v1/subscriptions/{{subscription_id}}",
+              "description": "Delete a subscription by ID"
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "Webhook Operations",
+        "item": [
+          {
+            "name": "Ingest Webhook (No Event Type)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "var jsonData = JSON.parse(responseBody);",
+                    "pm.collectionVariables.set(\"delivery_task_id\", jsonData.id);"
+                  ],
+                  "type": "text/javascript"
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "url": "{{base_url}}/api/v1/ingest/{{subscription_id}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"data\": \"sample webhook payload\",\n  \"timestamp\": \"2025-05-04T12:00:00Z\"\n}"
+              },
+              "description": "Ingest a webhook with no specific event type"
+            },
+            "response": []
+          },
+          {
+            "name": "Ingest Webhook (With Event Type)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "var jsonData = JSON.parse(responseBody);",
+                    "pm.collectionVariables.set(\"delivery_task_id\", jsonData.id);"
+                  ],
+                  "type": "text/javascript"
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "url": "{{base_url}}/api/v1/ingest/{{subscription_id}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "X-Event-Type",
+                  "value": "order.created"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"order_id\": \"12345\",\n  \"status\": \"completed\",\n  \"customer\": {\n    \"id\": \"cust_123\",\n    \"name\": \"John Doe\"\n  }\n}"
+              },
+              "description": "Ingest a webhook with a specific event type"
+            },
+            "response": []
+          },
+          {
+            "name": "Ingest Webhook (With Signature)",
+            "request": {
+              "method": "POST",
+              "url": "{{base_url}}/api/v1/ingest/{{subscription_id}}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "X-Event-Type",
+                  "value": "order.created"
+                },
+                {
+                  "key": "X-Webhook-Signature",
+                  "value": "YOUR_SIGNATURE_HERE"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"order_id\": \"12345\",\n  \"status\": \"completed\",\n  \"customer\": {\n    \"id\": \"cust_123\",\n    \"name\": \"John Doe\"\n  }\n}"
+              },
+              "description": "Ingest a webhook with HMAC signature verification"
+            },
+            "response": []
+          },
+          {
+            "name": "Get Delivery Status",
+            "request": {
+              "method": "GET",
+              "url": "{{base_url}}/api/v1/ingest/delivery/{{delivery_task_id}}",
+              "description": "Get the status and logs of a webhook delivery task"
+            },
+            "response": []
+          }
+        ]
+      }
+    ]
+  }
