@@ -153,63 +153,77 @@ def _prepare_webhook_delivery(db: Session, task_uuid: uuid.UUID) -> dict:
 def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: dict, delivery_result: dict) -> bool:
     """Process the result of a webhook delivery"""
     try:
-        with db.begin():
-            task = delivery_info['task']
+        # Get a reference to the task (no transaction yet)
+        task = delivery_info['task']
+        
+        # Create delivery log entry - This has its own transaction inside the function
+        log = crud_delivery.create_delivery_log(
+            db,
+            task_id=task_uuid,
+            subscription_id=task.subscription_id,
+            target_url=delivery_info['target_url'],
+            attempt_number=task.attempt_count,
+            status=delivery_result['status'],
+            status_code=delivery_result.get('status_code'),
+            error_details=delivery_result.get('error_details')
+        )
+        
+        # Now use the crud utility to update task status
+        if delivery_result['status'] == LogStatus.SUCCESS:
+            # Use the dedicated function to update task status
+            crud_delivery.update_task_status(
+                db, 
+                task_id=task_uuid,
+                status=TaskStatus.COMPLETED,
+                next_attempt_at=None
+            )
+            logger.info(f"Task {task_uuid} marked as COMPLETED after successful delivery")
+            return True
             
-            # Create delivery log entry - Fix parameter names to match crud_delivery.create_delivery_log
-            log = crud_delivery.create_delivery_log(
+        elif delivery_result['status'] == LogStatus.FAILED_ATTEMPT:
+            if task.attempt_count < task.max_retries:
+                next_attempt = calculate_next_attempt_time(task.attempt_count)
+                if next_attempt:
+                    # Update to pending with next attempt time
+                    crud_delivery.update_task_status(
+                        db,
+                        task_id=task_uuid,
+                        status=TaskStatus.PENDING,
+                        next_attempt_at=next_attempt
+                    )
+                    
+                    # Schedule next attempt
+                    process_webhook_delivery.apply_async(
+                        args=[str(task_uuid)],
+                        countdown=(next_attempt - datetime.utcnow()).total_seconds()
+                    )
+                    return True
+            
+            # If we get here, we've exceeded max retries
+            crud_delivery.update_task_status(
                 db,
                 task_id=task_uuid,
-                subscription_id=task.subscription_id,
-                target_url=delivery_info['target_url'],
-                attempt_number=task.attempt_count,
-                status=delivery_result['status'],
-                status_code=delivery_result.get('status_code'),
-                error_details=delivery_result.get('error_details')
+                status=TaskStatus.FAILED,
+                next_attempt_at=None
             )
+            logger.info(f"Task {task_uuid} marked as FAILED after maximum retries")
+            return False
             
-            if delivery_result['status'] == LogStatus.SUCCESS:
-                # Mark task as completed
-                task.status = TaskStatus.COMPLETED
-                task.next_attempt_at = None
-                db.add(task)
-                return True
-                
-            elif delivery_result['status'] == LogStatus.FAILED_ATTEMPT:
-                # Schedule next attempt if not exceeded max retries
-                if task.attempt_count < task.max_retries:
-                    next_attempt = calculate_next_attempt_time(task.attempt_count)
-                    if next_attempt:
-                        task.status = TaskStatus.PENDING
-                        task.next_attempt_at = next_attempt
-                        db.add(task)
-                        
-                        # We can commit the DB changes first to ensure status is updated
-                        db.commit()
-                        
-                        # Schedule next attempt - only if task is still in PENDING state
-                        # This helps prevent duplicate deliveries from race conditions
-                        process_webhook_delivery.apply_async(
-                            args=[str(task_uuid)],
-                            countdown=(next_attempt - datetime.utcnow()).total_seconds()
-                        )
-                        return True
-                
-                # If we get here, we've exceeded max retries
-                task.status = TaskStatus.FAILED
-                task.next_attempt_at = None
-                db.add(task)
-                return False
-                
-            else:  # LogStatus.FAILURE
-                # Mark as permanently failed
-                task.status = TaskStatus.FAILED
-                task.next_attempt_at = None
-                db.add(task)
-                return False
-                
+        else:  # LogStatus.FAILURE
+            # Mark as permanently failed
+            crud_delivery.update_task_status(
+                db,
+                task_id=task_uuid,
+                status=TaskStatus.FAILED,
+                next_attempt_at=None
+            )
+            logger.info(f"Task {task_uuid} marked as FAILED due to permanent failure")
+            return False
+            
     except Exception as e:
         logger.exception(f"Error processing delivery result: {task_uuid}")
+        # No need to rollback as we're using the CRUD utility functions
+        # which handle their own transactions
         raise
 
 
