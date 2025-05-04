@@ -11,8 +11,8 @@ from app.workers.celery_app import celery_app
 from app.core.config import settings
 from app.db.base import SessionLocal
 from app.db.models import Subscription
-from app.db.models.delivery_task import DeliveryStatus as TaskStatus
-from app.db.models.delivery_log import DeliveryStatus as LogStatus
+from app.db.models.delivery_task import DeliveryTask, DeliveryStatus as TaskStatus
+from app.db.models.delivery_log import DeliveryLog, DeliveryStatus as LogStatus
 from app.crud import crud_subscription, crud_delivery
 from app.services import cache
 
@@ -104,8 +104,8 @@ def _prepare_webhook_delivery(db: Session, task_uuid: uuid.UUID) -> dict:
         # Start a transaction
         with db.begin():
             # Get the delivery task with FOR UPDATE lock to prevent race conditions
-            task = db.query(crud_delivery.model).filter(
-                crud_delivery.model.id == task_uuid
+            task = db.query(DeliveryTask).filter(
+                DeliveryTask.id == task_uuid
             ).with_for_update().first()
             
             if not task:
@@ -119,6 +119,15 @@ def _prepare_webhook_delivery(db: Session, task_uuid: uuid.UUID) -> dict:
             if task.status == TaskStatus.FAILED:
                 logger.info(f"Task already failed: {task_uuid}")
                 return None
+            
+            # Fetch the subscription to get the target URL
+            subscription = db.query(Subscription).filter(
+                Subscription.id == task.subscription_id
+            ).first()
+            
+            if not subscription:
+                logger.error(f"Subscription not found for task: {task_uuid}")
+                return None
                 
             # Update task status to in_progress
             task.status = TaskStatus.IN_PROGRESS
@@ -126,7 +135,7 @@ def _prepare_webhook_delivery(db: Session, task_uuid: uuid.UUID) -> dict:
             db.add(task)
             
             return {
-                'target_url': task.subscription.target_url,
+                'target_url': subscription.target_url,
                 'payload': task.payload,
                 'task': task
             }
@@ -142,10 +151,10 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
         with db.begin():
             task = delivery_info['task']
             
-            # Create delivery log entry
-            log = crud_delivery.create_log(
+            # Create delivery log entry - Fix parameter names to match crud_delivery.create_delivery_log
+            log = crud_delivery.create_delivery_log(
                 db,
-                delivery_task_id=task_uuid,
+                task_id=task_uuid,
                 subscription_id=task.subscription_id,
                 target_url=delivery_info['target_url'],
                 attempt_number=task.attempt_count,
@@ -154,14 +163,15 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
                 error_details=delivery_result.get('error_details')
             )
             
-            if delivery_result['status'] == LogStatus.SUCCESS:
+            # Now compare with lowercase string values
+            if delivery_result['status'] == "success":
                 # Mark task as completed
                 task.status = TaskStatus.COMPLETED
                 task.next_attempt_at = None
                 db.add(task)
                 return True
                 
-            elif delivery_result['status'] == LogStatus.FAILED_ATTEMPT:
+            elif delivery_result['status'] == "failed_attempt":
                 # Schedule next attempt if not exceeded max retries
                 if task.attempt_count < task.max_retries:
                     next_attempt = calculate_next_attempt_time(task.attempt_count)
@@ -182,7 +192,7 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
                 db.add(task)
                 return False
                 
-            else:  # LogStatus.FAILURE
+            else:  # "failure"
                 # Mark as permanently failed
                 task.status = TaskStatus.FAILED
                 task.next_attempt_at = None
@@ -200,22 +210,34 @@ def deliver_webhook(target_url: str, payload: dict) -> dict:
         # Set timeout as per SRS (5-10 seconds)
         with httpx.Client(timeout=10.0) as client:
             response = client.post(target_url, json=payload)
+            logger.info(f"HTTP Request: POST {target_url} \"{response.status_code} {response.reason_phrase}\"")
             
-            # Return success response
-            return {
-                "success": 200 <= response.status_code < 300,
-                "status_code": response.status_code,
-                "status": LogStatus.SUCCESS if 200 <= response.status_code < 300 else LogStatus.FAILED_ATTEMPT,
-                "error": f"HTTP {response.status_code}" if response.status_code >= 400 else None,
-                "error_details": None if 200 <= response.status_code < 300 else f"HTTP {response.status_code}"
-            }
+            # Return success response with lowercase status values
+            if 200 <= response.status_code < 300:
+                # Use lowercase 'success' instead of 'SUCCESS'
+                return {
+                    "success": True,
+                    "status_code": response.status_code,
+                    "status": "success",  # Lowercase to match DB enum
+                    "error": None,
+                    "error_details": None
+                }
+            else:
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "status": "failed_attempt",  # Lowercase to match DB enum
+                    "error": f"HTTP {response.status_code}",
+                    "error_details": f"HTTP {response.status_code}"
+                }
             
     except Exception as e:
         # Return error response
+        logger.exception(f"Error delivering webhook to {target_url}: {str(e)}")
         return {
             "success": False,
             "status_code": None,
-            "status": LogStatus.FAILED_ATTEMPT,
+            "status": "failed_attempt",  # Lowercase to match DB enum
             "error": f"Unexpected error: {str(e)}",
             "error_details": str(e)
         }

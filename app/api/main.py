@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import logging
+import os
+from pathlib import Path
 
 from app.api.endpoints import status, subscriptions, ingest, health
 from app.core.config import settings
@@ -38,6 +41,9 @@ if settings.BACKEND_CORS_ORIGINS:
 # Add rate limiting middleware
 app.add_middleware(RateLimitMiddleware)
 
+# Mount static files directory
+app.mount("/static", StaticFiles(directory=Path(os.path.dirname(os.path.dirname(__file__))) / "static"), name="static")
+
 # Include API routers
 app.include_router(
     status.router, 
@@ -56,11 +62,13 @@ app.include_router(
 )
 app.include_router(health.router, tags=["health"])
 
-# Root redirect to docs
+# Root redirect to UI dashboard
 @app.get("/", include_in_schema=False)
 def root():
-    """Redirect to API documentation"""
-    return {"message": "Welcome to Webhook Delivery Service API", "docs": "/docs"}
+    """Redirect to UI dashboard"""
+    from fastapi.responses import HTMLResponse
+    
+    return HTMLResponse(content=open(Path(os.path.dirname(os.path.dirname(__file__))) / "static" / "index.html").read())
 
 
 # Set up application startup event handlers
