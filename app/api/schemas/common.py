@@ -22,6 +22,7 @@ class BaseResponse(BaseModel):
     
     class Config:
         orm_mode = True
+        from_attributes = True  # Required for Pydantic v2 compatibility
 
 
 class MessageResponse(BaseModel):

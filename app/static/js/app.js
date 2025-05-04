@@ -346,11 +346,31 @@ async function sendTestWebhook() {
 // Check delivery status by task ID
 async function checkDeliveryStatus(taskId) {
     try {
+        // Fix the URL to use the correct endpoint path
         const response = await fetch(`${API_BASE_URL}/ingest/delivery/${taskId}`);
         
+        // Handle non-JSON responses or errors
+        let deliveryData;
+        let errorMessage = null;
+        
+        try {
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                deliveryData = await response.json();
+            } else {
+                const text = await response.text();
+                errorMessage = `Server returned non-JSON response: ${text.substring(0, 50)}...`;
+                throw new Error(errorMessage);
+            }
+        } catch (parseError) {
+            if (errorMessage) {
+                throw new Error(errorMessage);
+            } else {
+                throw new Error(`Failed to parse response: ${parseError.message}`);
+            }
+        }
+        
         if (response.ok) {
-            const deliveryData = await response.json();
-            
             // Display the delivery status in a modal
             const statusModalHtml = `
                 <div class="modal fade" id="deliveryStatusModal" tabindex="-1">
@@ -505,13 +525,14 @@ function displayDeliveryLogs(logs) {
     }
     
     logs.forEach(log => {
-        const statusClass = log.status === 'success' ? 'text-success' : 
-                          log.status === 'failure' ? 'text-danger' : 'text-warning';
+        const statusClass = log.status === 'SUCCESS' ? 'text-success' : 
+                          log.status === 'FAILURE' ? 'text-danger' : 'text-warning';
         
+        // Use delivery_task_id instead of task_id
         const row = `
             <tr>
                 <td>${formatDate(log.created_at)}</td>
-                <td>${log.task_id}</td>
+                <td>${log.delivery_task_id}</td>
                 <td>${log.target_url}</td>
                 <td><span class="${statusClass}">${log.status}</span></td>
                 <td>${log.attempt_number}</td>
@@ -520,6 +541,18 @@ function displayDeliveryLogs(logs) {
             </tr>
         `;
         tableBody.insertAdjacentHTML('beforeend', row);
+    });
+    
+    // Add click handlers to make task IDs clickable for status checking
+    document.querySelectorAll('#logs-table-body td:nth-child(2)').forEach(cell => {
+        const taskId = cell.textContent;
+        if (taskId) {
+            cell.style.cursor = 'pointer';
+            cell.style.color = '#0d6efd';
+            cell.style.textDecoration = 'underline';
+            cell.title = 'Click to check delivery status';
+            cell.addEventListener('click', () => checkDeliveryStatus(taskId));
+        }
     });
 }
 

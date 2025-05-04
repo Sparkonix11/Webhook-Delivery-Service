@@ -145,8 +145,24 @@ def get_delivery_status(
         # Fetch logs for the task
         logs = crud_delivery.get_task_logs(db, task_id=delivery_task_id)
     
-    # Combine task and logs into the response model
-    task_with_logs = DeliveryTaskWithLogs.from_orm(task)
-    task_with_logs.logs = logs
+    # Create a dictionary with all fields needed for DeliveryTaskWithLogs
+    task_dict = {
+        "id": task.id,
+        "created_at": task.created_at,
+        "subscription_id": task.subscription_id,
+        "payload": task.payload,
+        "event_type": task.event_type,
+        "status": task.status,
+        "attempt_count": task.attempt_count,
+        "next_attempt_at": task.next_attempt_at,
+        "logs": logs  # Include logs directly in the initial dictionary
+    }
+    
+    # Create the model with all fields at once
+    try:
+        task_with_logs = DeliveryTaskWithLogs.model_validate(task_dict)
+    except Exception as e:
+        # Fallback to dict conversion if model_validate fails
+        task_with_logs = DeliveryTaskWithLogs(**task_dict)
     
     return task_with_logs

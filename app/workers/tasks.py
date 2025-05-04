@@ -119,6 +119,11 @@ def _prepare_webhook_delivery(db: Session, task_uuid: uuid.UUID) -> dict:
             if task.status == TaskStatus.FAILED:
                 logger.info(f"Task already failed: {task_uuid}")
                 return None
+                
+            # Additional check: if task is already in progress, don't process it again
+            if task.status == TaskStatus.IN_PROGRESS and task.attempt_count > 0:
+                logger.info(f"Task is already being processed: {task_uuid}")
+                return None
             
             # Fetch the subscription to get the target URL
             subscription = db.query(Subscription).filter(
@@ -163,15 +168,14 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
                 error_details=delivery_result.get('error_details')
             )
             
-            # Now compare with lowercase string values
-            if delivery_result['status'] == "success":
+            if delivery_result['status'] == LogStatus.SUCCESS:
                 # Mark task as completed
                 task.status = TaskStatus.COMPLETED
                 task.next_attempt_at = None
                 db.add(task)
                 return True
                 
-            elif delivery_result['status'] == "failed_attempt":
+            elif delivery_result['status'] == LogStatus.FAILED_ATTEMPT:
                 # Schedule next attempt if not exceeded max retries
                 if task.attempt_count < task.max_retries:
                     next_attempt = calculate_next_attempt_time(task.attempt_count)
@@ -179,7 +183,12 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
                         task.status = TaskStatus.PENDING
                         task.next_attempt_at = next_attempt
                         db.add(task)
-                        # Schedule next attempt
+                        
+                        # We can commit the DB changes first to ensure status is updated
+                        db.commit()
+                        
+                        # Schedule next attempt - only if task is still in PENDING state
+                        # This helps prevent duplicate deliveries from race conditions
                         process_webhook_delivery.apply_async(
                             args=[str(task_uuid)],
                             countdown=(next_attempt - datetime.utcnow()).total_seconds()
@@ -192,7 +201,7 @@ def _process_delivery_result(db: Session, task_uuid: uuid.UUID, delivery_info: d
                 db.add(task)
                 return False
                 
-            else:  # "failure"
+            else:  # LogStatus.FAILURE
                 # Mark as permanently failed
                 task.status = TaskStatus.FAILED
                 task.next_attempt_at = None
@@ -210,34 +219,22 @@ def deliver_webhook(target_url: str, payload: dict) -> dict:
         # Set timeout as per SRS (5-10 seconds)
         with httpx.Client(timeout=10.0) as client:
             response = client.post(target_url, json=payload)
-            logger.info(f"HTTP Request: POST {target_url} \"{response.status_code} {response.reason_phrase}\"")
             
-            # Return success response with lowercase status values
-            if 200 <= response.status_code < 300:
-                # Use lowercase 'success' instead of 'SUCCESS'
-                return {
-                    "success": True,
-                    "status_code": response.status_code,
-                    "status": "success",  # Lowercase to match DB enum
-                    "error": None,
-                    "error_details": None
-                }
-            else:
-                return {
-                    "success": False,
-                    "status_code": response.status_code,
-                    "status": "failed_attempt",  # Lowercase to match DB enum
-                    "error": f"HTTP {response.status_code}",
-                    "error_details": f"HTTP {response.status_code}"
-                }
+            # Return success response
+            return {
+                "success": 200 <= response.status_code < 300,
+                "status_code": response.status_code,
+                "status": LogStatus.SUCCESS if 200 <= response.status_code < 300 else LogStatus.FAILED_ATTEMPT,
+                "error": f"HTTP {response.status_code}" if response.status_code >= 400 else None,
+                "error_details": None if 200 <= response.status_code < 300 else f"HTTP {response.status_code}"
+            }
             
     except Exception as e:
         # Return error response
-        logger.exception(f"Error delivering webhook to {target_url}: {str(e)}")
         return {
             "success": False,
             "status_code": None,
-            "status": "failed_attempt",  # Lowercase to match DB enum
+            "status": LogStatus.FAILED_ATTEMPT,
             "error": f"Unexpected error: {str(e)}",
             "error_details": str(e)
         }

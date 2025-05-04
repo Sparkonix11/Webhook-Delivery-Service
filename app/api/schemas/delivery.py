@@ -39,7 +39,7 @@ class DeliveryTask(BaseResponse):
     next_attempt_at: Optional[datetime]
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class DeliveryLog(BaseResponse):
@@ -53,7 +53,7 @@ class DeliveryLog(BaseResponse):
     error_details: Optional[str]
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class DeliveryTaskWithLogs(DeliveryTask):
