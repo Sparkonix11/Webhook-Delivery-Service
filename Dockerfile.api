@@ -54,4 +54,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
 # Use the entrypoint script
-ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["cd /app && uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload"]
